@@ -49,9 +49,9 @@
             backgroundImage.onload = () => {
                 startSimulation(backgroundImage);
             };
+            backgroundImage.crossOrigin = "Anonymous";
 
             const queryString = window.location.search;
-            console.log(queryString);
             const urlParams = new URLSearchParams(queryString);
             backgroundImage.src = urlParams.has('image') ? urlParams.get('image') : 'default_background.jpg';
         </script>

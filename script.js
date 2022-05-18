@@ -1,7 +1,15 @@
 /*
+    Image Fluid Simulation
+
+    Creates a smooth 2D fluid simulation based on a given image. Background bleeding
+    added to allow the image to eventually blend back into the default dye colors. 
+    Code based on Fluid simulation by Pavel Dobryakov. 
+*/
+
+/*
 MIT License
 
-Copyright (c) 2017 Pavel Dobryakov
+ Copyright (c) 2017 Pavel Dobryakov
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -35,6 +43,7 @@ let config = {
     CAPTURE_RESOLUTION: 512,
     DENSITY_DISSIPATION: 0.0,
     VELOCITY_DISSIPATION: 0.2,
+    BACKGROUND_BLEED: 0.02,
     PRESSURE: 0.75,
     PRESSURE_ITERATIONS: 20,
     CURL: 5,
@@ -172,6 +181,7 @@ function startGUI () {
     gui.add(config, 'SIM_RESOLUTION', { '32': 32, '64': 64, '128': 128, '256': 256 }).name('sim resolution').onFinishChange(initFramebuffers);
     gui.add(config, 'VELOCITY_DISSIPATION', 0, 4.0).name('velocity diffusion');
     gui.add(config, 'PRESSURE', 0.0, 1.0).name('pressure');
+    gui.add(config, 'BACKGROUND_BLEED', 0.0, 0.25).name('background bleed');
     gui.add(config, 'CURL', 0, 50).name('vorticity').step(1);
     gui.add(config, 'PRESSURE_ITERATIONS', 5, 50).name('solver steps').step(5);
     gui.add(config, 'PAUSED').name('paused').listen();
@@ -374,6 +384,29 @@ const copyShader = compileShader(gl.FRAGMENT_SHADER, `
 
     void main () {
         gl_FragColor = texture2D(uTexture, vUv * uScale);
+    }
+`);
+
+const bleedShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision mediump float;
+    precision mediump sampler2D;
+
+    varying highp vec2 vUv;
+    uniform sampler2D uTexture;
+    uniform sampler2D uTarget;
+    uniform vec2 uScale;
+    uniform float uBleed;
+
+    vec3 lerp(vec3 a, vec3 b, float f)
+    {
+        return a * (1.0 - f) + b * f;
+    }
+
+    void main () {
+        vec3 oCol = texture2D(uTexture, vUv * uScale).rgb;
+        vec3 nCol = texture2D(uTarget, vUv).rgb;
+
+        gl_FragColor = vec4(lerp(nCol, oCol, uBleed), 1.0);
     }
 `);
 
@@ -643,6 +676,7 @@ let curl;
 let pressure;
 
 const copyProgram            = new Program(baseVertexShader, copyShader);
+const bleedProgram            = new Program(baseVertexShader, bleedShader);
 const clearProgram           = new Program(baseVertexShader, clearShader);
 const splatProgram           = new Program(baseVertexShader, splatShader);
 const advectionProgram       = new Program(baseVertexShader, advectionShader);
@@ -831,8 +865,9 @@ let colorUpdateTimer = 0.0;
 updateKeywords();
 initFramebuffers();
 
+let backgroundTexture;
 function startSimulation (image) {
-    var backgroundTexture = createTextureFromImage(image);
+    backgroundTexture = createTextureFromImage(image);
 
     copyProgram.bind();
     gl.uniform2f(copyProgram.uniforms.uScale, 1.0, -1.0);
@@ -903,6 +938,14 @@ function applyInputs () {
 function step (dt) {
     gl.disable(gl.BLEND);
 
+    bleedProgram.bind();
+    gl.uniform2f(bleedProgram.uniforms.uScale, 1.0, -1.0);
+    gl.uniform1i(bleedProgram.uniforms.uTexture, backgroundTexture.attach(0));
+    gl.uniform1i(bleedProgram.uniforms.uTarget, dye.read.attach(1));
+    gl.uniform1f(bleedProgram.uniforms.uBleed, config.BACKGROUND_BLEED);
+    blit(dye.write);
+    dye.swap();
+
     curlProgram.bind();
     gl.uniform2f(curlProgram.uniforms.texelSize, velocity.texelSizeX, velocity.texelSizeY);
     gl.uniform1i(curlProgram.uniforms.uVelocity, velocity.read.attach(0));
@@ -966,33 +1009,13 @@ function step (dt) {
 }
 
 function render (target) {
-    if (config.BLOOM)
-        applyBloom(dye.read, bloom);
-    if (config.SUNRAYS) {
-        applySunrays(dye.read, dye.write, sunrays);
-        blur(sunrays, sunraysTemp, 1);
-    }
-
     gl.disable(gl.BLEND);
     drawDisplay(target);
 }
 
 function drawDisplay (target) {
-    let width = target == null ? gl.drawingBufferWidth : target.width;
-    let height = target == null ? gl.drawingBufferHeight : target.height;
-
     displayMaterial.bind();
-    if (config.SHADING)
-        gl.uniform2f(displayMaterial.uniforms.texelSize, 1.0 / width, 1.0 / height);
     gl.uniform1i(displayMaterial.uniforms.uTexture, dye.read.attach(0));
-    if (config.BLOOM) {
-        gl.uniform1i(displayMaterial.uniforms.uBloom, bloom.attach(1));
-        gl.uniform1i(displayMaterial.uniforms.uDithering, ditheringTexture.attach(2));
-        let scale = getTextureScale(ditheringTexture, width, height);
-        gl.uniform2f(displayMaterial.uniforms.ditherScale, scale.x, scale.y);
-    }
-    if (config.SUNRAYS)
-        gl.uniform1i(displayMaterial.uniforms.uSunrays, sunrays.attach(3));
     blit(target);
 }
 
